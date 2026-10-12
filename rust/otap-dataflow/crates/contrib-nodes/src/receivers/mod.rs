@@ -13,6 +13,10 @@ pub mod kafka_receiver;
 #[cfg(feature = "oracle")]
 pub mod oracle_receiver;
 
+/// Experimental SQL Server adapter and query preparation.
+#[cfg(feature = "sql-server")]
+pub mod sql_server_receiver;
+
 /// Linux user_events receiver.
 #[cfg(all(feature = "user-events", target_os = "linux"))]
 pub mod user_events_receiver;

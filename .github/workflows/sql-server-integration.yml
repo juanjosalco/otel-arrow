@@ -1,0 +1,77 @@
+name: SQL Server receiver integration
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/sql-server-integration.yml"
+      - "rust/otap-dataflow/Cargo.toml"
+      - "rust/otap-dataflow/Cargo.lock"
+      - "rust/otap-dataflow/crates/contrib-nodes/Cargo.toml"
+      - "rust/otap-dataflow/crates/contrib-nodes/src/receivers/sql_server_receiver/**"
+      - "rust/otap-dataflow/crates/scraper/**"
+      - "rust/otap-dataflow/crates/engine/src/capability/**"
+      - "rust/otap-dataflow/crates/otap/src/crypto.rs"
+      - "rust/otap-dataflow/scripts/sql-server-fixture.py"
+      - "rust/otap-dataflow/scripts/test_sql_server_fixture.py"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  live-linux:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    env:
+      CARGO_PROFILE_TEST_DEBUG: "0"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          submodules: true
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@3c5f7ea28cd621ae0bf5283f0e981fb97b8a7af9
+        with:
+          toolchain: stable
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.12"
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          workspaces: rust/otap-dataflow
+          shared-key: sql-server-live
+          cache-bin: false
+          save-if: false
+      - name: Check fixture prerequisite discovery
+        run: python -B -m unittest discover -s rust/otap-dataflow/scripts -p test_sql_server_fixture.py
+      - name: Start pinned SQL Server with verified TLS
+        run: python rust/otap-dataflow/scripts/sql-server-fixture.py start --directory "$RUNNER_TEMP/sql-server-fixture"
+      - name: Exercise registered receiver and replay
+        shell: bash
+        run: |
+          python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+          import subprocess
+          fixture = json.loads((Path(os.environ["RUNNER_TEMP"]) / "sql-server-fixture" / "fixture.json").read_text())
+          env = dict(os.environ, **fixture["env"])
+          result = subprocess.run([
+              "cargo", "test", "--locked", "-p", "otel-arrow-dfe-contrib-nodes",
+              "--features", "sql-server", "sql_server_receiver::live_tests",
+              "--", "--ignored", "--nocapture"
+          ], cwd="rust/otap-dataflow", env=env, check=False)
+          raise SystemExit(result.returncode)
+          PY
+      - name: Stop only the owned fixture and remove generated secrets
+        if: always()
+        run: |
+          if [ -f "$RUNNER_TEMP/sql-server-fixture/fixture.json" ]; then
+            python rust/otap-dataflow/scripts/sql-server-fixture.py stop --directory "$RUNNER_TEMP/sql-server-fixture"
+          fi
+      - name: Upload server diagnostics on failure
+        if: failure()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: sql-server-log
+          path: ${{ runner.temp }}/sql-server-fixture/server.log
+          if-no-files-found: ignore

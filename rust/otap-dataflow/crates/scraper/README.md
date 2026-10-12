@@ -410,7 +410,7 @@ support does not by itself implement database login.
 
 | Method / type | Responsibility |
 | --- | --- |
-| `DriverAdapter::system` | Return a stable database-system identity. `DatabaseSystem` currently contains only `Oracle`; that enum value does not include an Oracle driver. |
+| `DriverAdapter::system` | Return a stable database-system identity. `DatabaseSystem` contains `Oracle` and `SqlServer`; neither enum value includes a vendor driver or registers a receiver. |
 | `begin_operation` | Reset operation cancellation state and return a cancellation handle before native work begins. |
 | `validate_query` | Validate single-statement/read-only SQL, cursor binds, keyset predicate, ordering, and non-null cursor metadata before polling. |
 | `execute` | Execute the validated query with bound cursor parameters and return a bounded `QueryPage` strictly after the committed cursor. |

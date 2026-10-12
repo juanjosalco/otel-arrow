@@ -59,6 +59,7 @@ Receivers ingest data into a pipeline.
 | `receiver:etw` | `etw` | Experimental | Ingests Event Tracing for Windows events as logs. |
 | [`receiver:kafka`](src/receivers/kafka_receiver/README.md) | `kafka` | Experimental | Consumes traces, metrics, and logs from Kafka. |
 | [`urn:otel:receiver:oracle`](src/receivers/oracle_receiver/README.md) | `oracle` | Experimental | Polls Oracle queries into logs; explicitly opt-in and requires separately installed Oracle Client libraries. |
+| [`urn:otel:receiver:sql_server`](src/receivers/sql_server_receiver/README.md) | `sql-server` | Experimental | Polls SQL Server queries into logs over verified TLS, using capability-based SQL credentials and shared acknowledged checkpoints. |
 | [`receiver:user_events`](src/receivers/user_events_receiver/README.md) | `user-events` | Experimental | Ingests Linux `user_events` tracepoints as logs. |
 
 ## Processors
@@ -85,8 +86,8 @@ Exporters send data out of a pipeline.
 ## Feature Aggregates
 
 - `contrib-nodes`: enables contrib receivers, processors, and exporters, except
-  the explicitly opt-in Oracle receiver.
-- `contrib-receivers`: enables contrib receivers except Oracle.
+  the explicitly opt-in Oracle and SQL Server receivers.
+- `contrib-receivers`: enables contrib receivers except Oracle and SQL Server.
 - `contrib-processors`: enables all contrib processors.
 - `contrib-exporters`: enables all contrib exporters.
 - `kafka`: enables both the Kafka receiver and exporter.
@@ -94,6 +95,10 @@ Exporters send data out of a pipeline.
 Enable `oracle` explicitly to include Oracle. It is excluded from both
 `contrib-receivers` and `contrib-nodes` because Oracle Client libraries must be
 provisioned separately.
+
+Enable `sql-server` explicitly to include SQL Server. It has no separately
+installed database client but remains opt-in while driver qualification is
+experimental. The host feature also enables `flat-file-user-pass-auth`.
 
 When these features are enabled in the top-level binary, their factories are
 registered into the OTAP pipeline factory maps.

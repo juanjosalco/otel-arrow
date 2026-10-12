@@ -217,6 +217,10 @@ simdutf8 = "0.1.5"
 slotmap = "1.0.7"
 smallvec = { version = "1.15" , features = ["union", "const_new"] }
 socket2 = { version = "0.6.1", features = ["all"] }
+sqlparser = { version = "0.62.0", default-features = false, features = ["std"] }
+# Temporary provider-neutral TLS fix: https://github.com/tiberius-rs/tiberius/pull/456
+# Return to a crates.io release once it includes this fix; do not track a moving branch.
+tiberius = { git = "https://github.com/juanjosalco/tiberius", rev = "8bbd59fe9e01a74b6f790756077c8b0e09605c68", default-features = false, features = ["tds73", "rustls-no-provider"] }
 ipnet = "2.11.0"
 syn = { version = "2.0", features = ["full", "extra-traits"] }
 zstd = "0.13"
@@ -353,6 +357,7 @@ oracle = [
     "otel-arrow-dfe-contrib-nodes/oracle",
     "flat-file-user-pass-auth",
 ]
+sql-server = ["otel-arrow-dfe-contrib-nodes/sql-server", "flat-file-user-pass-auth"]
 user-events = ["otel-arrow-dfe-contrib-nodes/user-events"]
 windows-perf-counters = ["otel-arrow-dfe-contrib-nodes/windows-perf-counters"]
 

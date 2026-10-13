@@ -17,9 +17,10 @@ pins commit `8bbd59fe9e01a74b6f790756077c8b0e09605c68` with
 release once it includes this fix. Do not enable Tiberius's legacy `rustls` or
 `rustls-webpki-roots` features: they intentionally retain AWS-LC for existing users.
 
-`TcpConnector` establishes verified TLS using the host-installed crypto provider,
-platform certificate roots, and an optional additional CA file. There is no
-plaintext mode or certificate-verification bypass. The factory requires one
+`TcpConnector` defaults to verified TLS using the host-installed crypto provider,
+platform certificate roots, and an optional additional CA file. Explicit
+SQL Server-only testing options can request a non-TLS connection or bypass
+certificate validation. The factory requires one
 pipeline core and the `basic_auth_provider` capability and acquires shared
 checkpoint ownership before starting.
 
@@ -61,12 +62,14 @@ database and SELECT access only to the intended table/view. Metadata discovery
 requires permission to execute that same query; no blanket administrator grant
 is required. Provision a server certificate trusted by the host or supply its
 CA through `connection.tls.ca_file`. Certificate identity must match
-`connection.host`.
+`connection.tls.server_name_override`, or `connection.host` when no override
+is configured.
 
 Enable `sql-server` in the engine build; the root feature also enables the
 flat-file credential extension. The normal host initialization installs the
 selected `crypto-*` provider before any receiver starts. An embedding host must
-do the same. Missing provider selection is an explicit error, not a fallback.
+do the same when TLS is enabled. Missing provider selection is an explicit
+error, not an insecure fallback.
 
 The complete runnable pipeline is
 [`configs/sql-server-console.yaml`][example]. It binds `basic_auth_provider` to
@@ -74,6 +77,57 @@ The complete runnable pipeline is
 `SQL_SERVER_STATE_DIR` for persistent checkpoint files (default `./state/sql_server`).
 The optional CA file augments platform roots and is
 limited to 4 MiB. Omit the TLS block when platform trust is sufficient.
+
+### SQL Server TLS settings
+
+These fields belong only to this receiver's `connection.tls` block. They do not
+change the shared scraper or other database receivers.
+
+```yaml
+connection:
+  host: sql01.example.com
+  database: telemetry
+  tls:
+    enabled: true
+    trust_server_certificate: false
+    ca_file: 'C:\certificates\company-ca.pem'   # Optional
+    server_name_override: sql01.example.com   # Optional
+```
+
+Omitting the block preserves verified TLS. `enabled: true` requires full-session
+encryption and never falls back to an unencrypted connection.
+`server_name_override` changes the TLS certificate/SNI name, not the TCP address.
+
+For controlled testing with an untrusted or mismatched server certificate:
+
+```yaml
+tls:
+  enabled: true
+  trust_server_certificate: true
+```
+
+This bypasses **both certificate-chain and hostname validation**. It is not a
+hostname-only switch and does not authenticate the server. Do not combine it
+with `ca_file`; that configuration is rejected. A name override may still be
+used for SNI, but the server certificate is not verified.
+
+For an isolated server configured to permit non-TLS clients:
+
+```yaml
+tls:
+  enabled: false
+```
+
+This requests a non-TLS connection using Tiberius `NotSupported`, not its
+login-only `Off` mode. SQL Server policy can refuse the request or require
+encryption; this option does not override server policy. Omit `ca_file`,
+`server_name_override`, and `trust_server_certificate: true` when TLS is
+disabled; contradictory settings fail validation.
+
+The receiver factory warns when either unsafe test mode is selected. They can expose
+credentials or row data, or allow an impersonated server, and should be used
+only with non-sensitive test data in an isolated environment. New TLS settings
+do not change source-position fingerprints or reset checkpoints.
 
 The console destination demonstrates collection, not durable delivery.
 Replace it with a feedback-preserving path to a durable destination when relying
@@ -99,8 +153,9 @@ requires a `Send` transport, not a multithreaded receiver runtime or session poo
 
 The adapter acquires the current `BasicAuthProvider` snapshot on connect/reconnect,
 rejects near-expiry credentials, constructs SQL authentication directly, and
-requests `EncryptionLevel::Required`. The connector must honor verified TLS and
-the configured CA file; it must not silently relax this contract.
+passes the configured SQL Server TLS policy to the connector. Default
+connections require verified TLS; explicit testing exceptions are never
+enabled implicitly.
 Credential acquisition and connection establishment share one timeout.
 
 Tiberius loads platform roots synchronously inside its TLS handshake.
@@ -186,7 +241,10 @@ checkpoint:
 | `connection.database` | Required nonempty name, no control characters, at most 128 UTF-16 code units. |
 | `connection.port` | Default 1433; 1..65535. |
 | `connection.connect_timeout` | Default 10s; 1s..5m, whole seconds. Total credential/DNS/TCP/TLS/login attempt budget. |
-| `connection.tls.ca_file` | Optional nonempty path; supplied null is rejected. The file is not read during preparation. No insecure-verification option exists. |
+| `connection.tls.enabled` | Default `true`; require TLS. `false` requests a non-TLS connection subject to server policy. |
+| `connection.tls.trust_server_certificate` | Default `false`; explicit `true` bypasses certificate-chain and hostname checks for testing. Conflicts with `ca_file` and disabled TLS. |
+| `connection.tls.ca_file` | Optional nonempty PEM path; supplied null is rejected. Requires enabled, verified TLS. The file is not read during preparation. |
+| `connection.tls.server_name_override` | Optional DNS name or unbracketed IP used for TLS identity/SNI instead of the connection host. Requires enabled TLS. |
 | `query.interval` | Default 1m; 1m..24h, whole seconds. |
 | `query.timeout` | Default 30s; 1s..5m, whole seconds. Total metadata/fetch operation budget, not an ACK deadline. |
 | `query.fetch_size_rows` | Default 300; 1..`max_rows_per_poll`. Cooperative decode-chunk bound, not a TDS packet size. |
@@ -318,7 +376,8 @@ with receiver startup unless the fixture command succeeds.
 
 ```powershell
 # From the repository root; choose a new scratch directory outside the checkout.
-python rust\otap-dataflow\scripts\sql-server-fixture.py start --directory C:\temp\otel-sql-fixture
+python rust\otap-dataflow\scripts\sql-server-fixture.py start `
+    --directory C:\temp\otel-sql-fixture --allow-unencrypted
 $fixture = Get-Content C:\temp\otel-sql-fixture\fixture.json -Raw | ConvertFrom-Json
 foreach ($entry in $fixture.env.PSObject.Properties) {
     Set-Item -Path "Env:$($entry.Name)" -Value $entry.Value
@@ -334,6 +393,10 @@ The fixture uses SQL Server 2022 build 16.0.4295.3, pinned by image digest in th
 script. It binds an ephemeral host port to loopback, generates a short-lived
 CA/certificate, creates a restricted reader, and removes only its owned
 container and generated secrets on stop. Its setup client also verifies TLS.
+The explicit `--allow-unencrypted` flag lets the full live suite exercise the
+SQL Server-only non-TLS testing option. Omitting this developer flag keeps
+server-enforced encryption enabled. The normal demo continues to use that
+secure fixture default.
 For Linux receivers, load the same variables from `fixture.json`; a client
 container sharing the server container's network namespace uses `localhost:1433`
 and mounts the CA/password files read-only.
@@ -342,6 +405,10 @@ The same four live cases have been exercised with native Windows x64 receivers
 (Ring and SymCrypt) and a Linux x64 receiver (Ring), against that pinned
 Linux-container fixture: all polling modes/type fidelity, invalid CA/hostname
 rejection, connection cancellation cleanup, and factory NACK/replay/ACK/restart.
+Additional live cases cover valid and invalid verification-name overrides,
+explicit certificate bypass, and a non-TLS connection in an isolated process
+with no installed crypto provider. These require the fixture's
+`--allow-unencrypted` testing flag.
 This is **not** qualification of Windows-hosted SQL Server, other server versions,
 Azure SQL/Managed Instance, ARM64, or all in-flight query cancellation scenarios.
 The Linux integration workflow repeats these cases; the Windows CI test archive

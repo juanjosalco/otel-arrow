@@ -20,6 +20,9 @@ pub enum SqlServerError {
     /// TLS verification or negotiation failed.
     #[error("SQL Server TLS verification or negotiation failed")]
     Tls,
+    /// Contradictory SQL Server TLS options cannot be applied safely.
+    #[error("SQL Server TLS options are contradictory")]
+    TlsConfiguration,
     /// The host did not install the selected TLS crypto provider.
     #[error("SQL Server TLS requires a process-installed crypto-* provider")]
     CryptoProvider,

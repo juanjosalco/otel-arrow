@@ -20,6 +20,18 @@ SPEC.loader.exec_module(FIXTURE)
 
 
 class PrerequisiteTests(unittest.TestCase):
+    # Scenario: The fixture permits non-TLS connections only through an explicit testing flag.
+    # Guarantees: Default setup forces TLS, and the opt-in retains the certificate/TLS configuration.
+    def test_unencrypted_fixture_mode_is_explicit(self):
+        secure = FIXTURE.server_tls_configuration()
+        testing = FIXTURE.server_tls_configuration(allow_unencrypted=True)
+        self.assertIn("forceencryption = 1\n", secure)
+        self.assertEqual(
+            testing, secure.replace("forceencryption = 1\n", "forceencryption = 0\n")
+        )
+        self.assertIn("tlscert = ", testing)
+        self.assertIn("tlskey = ", testing)
+
     # Scenario: OpenSSL is explicitly available on the user's PATH.
     # Guarantees: The user's selected executable wins over Git installation discovery.
     def test_path_executable_takes_precedence(self):

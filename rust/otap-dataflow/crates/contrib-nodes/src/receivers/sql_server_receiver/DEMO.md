@@ -353,6 +353,11 @@ coverage, use the live-test commands in the [receiver README][readme].
 Run them against a **fresh, unmodified three-row fixture**, before adding IDs
 4 or 5; their assertions expect the original seed data.
 
+The full live suite also exercises explicit non-TLS testing and therefore needs
+the fixture's `--allow-unencrypted` flag, as shown in the README. The interactive
+demo above deliberately keeps server-enforced TLS enabled and does not need
+that flag. Keep the secure demo and permissive test fixture separate.
+
 These tests require Rust build tooling. They are not necessary for presenting
 the already-built engine demo.
 

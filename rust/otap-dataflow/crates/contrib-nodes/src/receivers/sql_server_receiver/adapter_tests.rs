@@ -817,3 +817,66 @@ async fn stock_driver_tracing_cannot_leak_server_messages() {
     assert!(!captured.contains("SENSITIVE-server-data"));
     adapter.shutdown().await.unwrap();
 }
+
+/// Scenario: SQL Server TLS is omitted, enabled, or explicitly disabled for testing.
+/// Guarantees: The driver uses Required or NotSupported (never login-only Off),
+/// and the TLS identity override does not change the connection host.
+#[test]
+fn sql_server_tls_policy_selects_exact_driver_modes() {
+    use super::adapter::{configure_tls, encryption_level};
+    for (tls, enabled, name) in [
+        (json!({}), true, "sql.example.test"),
+        (
+            json!({"enabled":true,"server_name_override":"cert.example.test"}),
+            true,
+            "cert.example.test",
+        ),
+        (
+            json!({"enabled":true,"trust_server_certificate":true}),
+            true,
+            "sql.example.test",
+        ),
+        (json!({"enabled":false}), false, "sql.example.test"),
+    ] {
+        let endpoint: SqlServerConnectionConfig = serde_json::from_value(json!({
+            "host":"sql.example.test", "database":"fixture", "tls":tls
+        }))
+        .unwrap();
+        let mut driver = tiberius::Config::new();
+        configure_tls(&endpoint, &mut driver).unwrap();
+        assert_eq!(endpoint.host(), "sql.example.test");
+        assert_eq!(
+            endpoint.server_name_override().unwrap_or(endpoint.host()),
+            name
+        );
+        assert_eq!(
+            encryption_level(endpoint.tls_enabled()),
+            if enabled {
+                tiberius::EncryptionLevel::Required
+            } else {
+                tiberius::EncryptionLevel::NotSupported
+            },
+        );
+    }
+}
+
+/// Scenario: A programmatic connector caller bypasses the outer receiver's semantic validation.
+/// Guarantees: Contradictory TLS settings return a redacted error before Tiberius can panic.
+#[test]
+fn programmatic_tls_conflicts_fail_before_driver_configuration() {
+    for tls in [
+        json!({"ca_file":"SENSITIVE","trust_server_certificate":true}),
+        json!({"enabled":false,"ca_file":"SENSITIVE"}),
+        json!({"enabled":false,"server_name_override":"SENSITIVE"}),
+        json!({"enabled":false,"trust_server_certificate":true}),
+    ] {
+        let endpoint: SqlServerConnectionConfig = serde_json::from_value(json!({
+            "host":"localhost", "database":"fixture", "tls":tls
+        }))
+        .unwrap();
+        let error = super::adapter::configure_tls(&endpoint, &mut tiberius::Config::new())
+            .expect_err("invalid combination");
+        assert_eq!(error, Error::TlsConfiguration);
+        assert!(!error.to_string().contains("SENSITIVE"));
+    }
+}

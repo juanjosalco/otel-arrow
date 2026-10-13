@@ -24,7 +24,7 @@ use tracing::instrument::WithSubscriber;
 
 /// Establishes a Tiberius session without coupling polling to a TLS implementation.
 ///
-/// Implementations must enforce the supplied Required encryption and verified host identity,
+/// Implementations must honor the SQL Server-specific endpoint TLS policy,
 /// use the supplied SQL-login credentials, and cancel work when their future drops.
 /// Any off-core work must be confirmed stopped by `shutdown` before source ownership
 /// can be released. Never log the driver's Config or error text.
@@ -167,7 +167,7 @@ impl<C: SqlServerConnector> SqlServerAdapter<C> {
             config.host(endpoint.host());
             config.port(endpoint.port());
             config.database(endpoint.database());
-            config.encryption(EncryptionLevel::Required);
+            configure_tls(endpoint, &mut config)?;
             config.authentication(AuthMethod::sql_server(
                 credential.expose_username(),
                 credential.expose_password(),
@@ -363,6 +363,7 @@ impl<C: SqlServerConnector> DriverAdapter for SqlServerAdapter<C> {
             | Error::Cursor
             | Error::NotValidated
             | Error::Tls
+            | Error::TlsConfiguration
             | Error::CryptoProvider => ReceiverErrorKind::Configuration,
             _ => ReceiverErrorKind::Transport,
         }
@@ -376,4 +377,36 @@ async fn driver_call<F: Future>(future: F) -> F::Output {
     future
         .with_subscriber(tracing::subscriber::NoSubscriber::default())
         .await
+}
+
+pub(super) fn encryption_level(enabled: bool) -> EncryptionLevel {
+    if enabled {
+        EncryptionLevel::Required
+    } else {
+        // Off encrypts only the login. NotSupported requests a non-TLS session;
+        // SQL Server can still refuse the request or require encryption.
+        EncryptionLevel::NotSupported
+    }
+}
+
+pub(super) fn configure_tls(
+    endpoint: &SqlServerConnectionConfig,
+    config: &mut Config,
+) -> Result<(), Error> {
+    // Defend the public connector API as well as the validated receiver factory.
+    // Tiberius panics when trust_cert is combined with an explicit CA bundle.
+    if (endpoint.ca_file().is_some() && endpoint.trust_server_certificate())
+        || (!endpoint.tls_enabled()
+            && (endpoint.ca_file().is_some()
+                || endpoint.server_name_override().is_some()
+                || endpoint.trust_server_certificate()))
+    {
+        return Err(Error::TlsConfiguration);
+    }
+    config.encryption(encryption_level(endpoint.tls_enabled()));
+    config.hostname_in_certificate(endpoint.server_name_override().unwrap_or(endpoint.host()));
+    if endpoint.trust_server_certificate() {
+        config.trust_cert();
+    }
+    Ok(())
 }

@@ -1,12 +1,14 @@
 // Copyright The OpenTelemetry Authors
 // SPDX-License-Identifier: Apache-2.0
 
-//! Verified TLS connection establishment without blocking the pipeline's local executor.
+//! SQL Server connection policy without blocking the pipeline's local executor.
 
-use super::{SqlServerConnectionConfig, SqlServerConnector, SqlServerError as Error};
+use super::{
+    SqlServerConnectionConfig, SqlServerConnector, SqlServerError as Error, adapter::configure_tls,
+};
 use async_trait::async_trait;
 use std::{fs::File, io::Read, path::PathBuf};
-use tiberius::{Client, Config, EncryptionLevel};
+use tiberius::{Client, Config};
 use tokio::{
     net::TcpStream,
     runtime::Handle,
@@ -17,7 +19,7 @@ use tracing::instrument::WithSubscriber;
 
 const MAX_CA_BYTES: u64 = 4 * 1024 * 1024;
 
-/// TCP/TLS connector using the process-installed Rustls crypto provider.
+/// TCP/TLS connector defaulting to verified TLS with the host's crypto provider.
 ///
 /// Tiberius loads platform roots synchronously inside its async handshake. One
 /// bounded, adapter-owned thread handles connection establishment only, using
@@ -74,7 +76,8 @@ impl SqlServerConnector for TcpConnector {
         endpoint: &SqlServerConnectionConfig,
         mut config: Config,
     ) -> Result<Client<Self::Stream>, Error> {
-        if !otel_arrow_dfe_otap::crypto::is_crypto_provider_installed() {
+        configure_tls(endpoint, &mut config)?;
+        if endpoint.tls_enabled() && !otel_arrow_dfe_otap::crypto::is_crypto_provider_installed() {
             return Err(Error::CryptoProvider);
         }
         // Join an interrupted attempt before admitting another connection.
@@ -82,7 +85,6 @@ impl SqlServerConnector for TcpConnector {
         let host = endpoint.host().to_owned();
         let port = endpoint.port();
         let ca_file = endpoint.ca_file().map(PathBuf::from);
-        config.encryption(EncryptionLevel::Required);
         let reactor = Handle::current();
         let (cancel, mut cancelled) = watch::channel(false);
         let (result_tx, result_rx) = oneshot::channel();

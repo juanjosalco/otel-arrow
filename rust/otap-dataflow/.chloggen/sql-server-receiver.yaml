@@ -8,7 +8,7 @@ change_type: new_component
 component: pipeline
 
 # A brief description of the change.  Surround your text with quotes ("") if it needs to start with a backtick (`).
-note: Add an opt-in experimental SQL Server query-polling receiver with verified TLS and acknowledged file checkpoints.
+note: Add an opt-in experimental SQL Server query-polling receiver with verified TLS by default and acknowledged file checkpoints.
 
 # Mandatory: One or more tracking issues related to the change. You can use the PR number here if no issue exists.
 issues: [3918]
@@ -19,6 +19,6 @@ issues: [3918]
 # section with the specific action consumers must take. Keep notes to 200
 # characters and subtext to 300 characters.
 subtext: |
-  Enable the sql-server feature and bind a basic_auth_provider. Supports snapshots
-  and signed-integer/datetime2 keysets. Use one active poller per source range.
+  Enable sql-server and bind basic_auth_provider. SQL Server-only name overrides
+  and explicit insecure test modes are available. Use one active poller per range.
   Driver-internal memory bounds and broader deployment qualification remain experimental.

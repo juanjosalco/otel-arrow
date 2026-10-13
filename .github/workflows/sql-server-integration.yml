@@ -44,7 +44,8 @@ jobs:
       - name: Check fixture prerequisite discovery
         run: python -B -m unittest discover -s rust/otap-dataflow/scripts -p test_sql_server_fixture.py
       - name: Start pinned SQL Server with verified TLS
-        run: python rust/otap-dataflow/scripts/sql-server-fixture.py start --directory "$RUNNER_TEMP/sql-server-fixture"
+        # Permit explicit non-TLS test cases; setup and secure-default tests still verify TLS.
+        run: python rust/otap-dataflow/scripts/sql-server-fixture.py start --directory "$RUNNER_TEMP/sql-server-fixture" --allow-unencrypted
       - name: Exercise registered receiver and replay
         shell: bash
         run: |

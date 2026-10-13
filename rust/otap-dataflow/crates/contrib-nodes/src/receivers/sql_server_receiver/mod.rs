@@ -69,6 +69,17 @@ pub static SQL_SERVER_RECEIVER: ReceiverFactory<OtapPdata> = ReceiverFactory {
             .map_err(invalid)?;
         let config: SqlServerReceiverConfig =
             serde_json::from_value(node_config.config.clone()).map_err(invalid)?;
+        if !config.connection().tls_enabled() {
+            otel_arrow_dfe_telemetry::otel_warn!(
+                "sql_server.tls_not_required",
+                message = "SQL Server TLS is not required by this receiver. Credentials and rows may be unencrypted; use only for isolated testing. Server policy may still require encryption."
+            );
+        } else if config.connection().trust_server_certificate() {
+            otel_arrow_dfe_telemetry::otel_warn!(
+                "sql_server.certificate_verification_disabled",
+                message = "SQL Server certificate-chain and hostname validation are disabled. The server is not authenticated; use only for isolated testing."
+            );
+        }
         let query = config.query().clone();
         let checkpoint = config.checkpoint();
         let source = SourceBinding::acquire(CheckpointStore::new(

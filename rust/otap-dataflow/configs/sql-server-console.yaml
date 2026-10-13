@@ -28,6 +28,8 @@ groups:
                 port: ${env:SQL_SERVER_PORT:-1433}
                 database: '${env:SQL_SERVER_DATABASE:-otap_fixture}'
                 tls:
+                  enabled: true
+                  trust_server_certificate: false
                   ca_file: '${env:SQL_SERVER_CA_FILE}'
               query:
                 statement: >

@@ -309,3 +309,113 @@ fn live_factory_replay_and_restart() {
         );
     }
 }
+
+/// Scenario: SQL Server permits test connections with explicit TLS policy and server-name overrides.
+/// Guarantees: Defaults validate certificates, overrides preserve verification, bypass is explicit,
+/// and disabled TLS can poll an isolated fixture without requiring a CA file.
+#[tokio::test]
+#[ignore = "requires the OTAP_SQL_SERVER_* fixture started with --allow-unencrypted"]
+async fn live_sql_server_tls_test_options() {
+    assert_eq!(
+        required("OTAP_SQL_SERVER_ALLOW_UNENCRYPTED"),
+        "1",
+        "start the disposable fixture with --allow-unencrypted for this test"
+    );
+    otel_arrow_dfe_otap::crypto::ensure_crypto_provider();
+    let ca_file = required("OTAP_SQL_SERVER_CA_FILE");
+    let cases = [
+        (
+            json!({"enabled":true,"ca_file":ca_file,"server_name_override":"localhost"}),
+            true,
+        ),
+        (
+            json!({"enabled":true,"ca_file":ca_file,"server_name_override":"wrong.example.invalid"}),
+            false,
+        ),
+        (
+            json!({"enabled":true,"trust_server_certificate":true}),
+            true,
+        ),
+        (
+            json!({"enabled":true,"trust_server_certificate":true,"server_name_override":"wrong.example.invalid"}),
+            true,
+        ),
+        (json!({"enabled":false}), true),
+    ];
+    for (tls, should_connect) in cases {
+        let mut raw = config("scalar");
+        // The certificate identifies localhost, not this IP. A positive verified
+        // connection must therefore use the explicit verification-name override.
+        raw["connection"]["host"] = json!("127.0.0.1");
+        raw["connection"]["tls"] = tls;
+        let config: SqlServerReceiverConfig = serde_json::from_value(raw).unwrap();
+        let query = config.query().clone();
+        let mut adapter = SqlServerAdapter::new(config, TcpConnector::default(), credentials());
+        _ = adapter.begin_operation().unwrap();
+        let result = adapter.validate_query(&query).await;
+        if should_connect {
+            _ = result.expect("configured SQL Server test mode");
+            _ = adapter.begin_operation().unwrap();
+            let page = adapter
+                .execute(&query, &query.watermark().initial())
+                .await
+                .unwrap();
+            assert_eq!(page.rows[0].row.values[0], CellValue::Int64(1));
+        } else {
+            assert!(result.is_err(), "wrong verification name must fail");
+        }
+        adapter.shutdown().await.expect("connection cleanup");
+    }
+}
+
+/// Scenario: A separate receiver process requests non-TLS against the explicitly permissive fixture.
+/// Guarantees: Disabled TLS does not require an installed crypto provider or quietly use login-only TLS.
+#[test]
+#[ignore = "requires the OTAP_SQL_SERVER_* fixture started with --allow-unencrypted"]
+fn live_disabled_tls_without_crypto_provider() {
+    const CHILD: &str = "OTAP_SQL_SERVER_NO_CRYPTO_CHILD";
+    if std::env::var_os(CHILD).is_none() {
+        let result = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--ignored", "--exact",
+                "receivers::sql_server_receiver::live_tests::live_disabled_tls_without_crypto_provider",
+                "--nocapture",
+            ])
+            .env(CHILD, "1")
+            .output()
+            .expect("isolated test process");
+        assert!(
+            result.status.success(),
+            "child failed:\n{}\n{}",
+            String::from_utf8_lossy(&result.stdout),
+            String::from_utf8_lossy(&result.stderr),
+        );
+        return;
+    }
+    assert_eq!(required("OTAP_SQL_SERVER_ALLOW_UNENCRYPTED"), "1");
+    assert!(!otel_arrow_dfe_otap::crypto::is_crypto_provider_installed());
+    tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap()
+        .block_on(async {
+            let mut raw = config("scalar");
+            raw["connection"]["tls"] = json!({"enabled":false});
+            let config: SqlServerReceiverConfig = serde_json::from_value(raw).unwrap();
+            let query = config.query().clone();
+            let mut adapter = SqlServerAdapter::new(config, TcpConnector::default(), credentials());
+            _ = adapter.begin_operation().unwrap();
+            _ = adapter
+                .validate_query(&query)
+                .await
+                .expect("non-TLS metadata");
+            _ = adapter.begin_operation().unwrap();
+            let page = adapter
+                .execute(&query, &query.watermark().initial())
+                .await
+                .expect("non-TLS rows");
+            assert_eq!(page.rows[0].row.values[0], CellValue::Int64(1));
+            adapter.shutdown().await.unwrap();
+        });
+    assert!(!otel_arrow_dfe_otap::crypto::is_crypto_provider_installed());
+}

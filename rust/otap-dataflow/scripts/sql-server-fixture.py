@@ -65,7 +65,17 @@ def run(args, *, env=None, timeout=60):
     return result.stdout.strip()
 
 
-def start(directory):
+def server_tls_configuration(allow_unencrypted=False):
+    return (
+        "[network]\n"
+        "tlscert = /var/opt/mssql/tls/server.crt\n"
+        "tlskey = /var/opt/mssql/tls/server.key\n"
+        "tlsprotocols = 1.2\n"
+        f"forceencryption = {0 if allow_unencrypted else 1}\n"
+    )
+
+
+def start(directory, allow_unencrypted=False):
     openssl = find_executable("openssl")
     docker = find_executable("docker")
     try:
@@ -99,11 +109,7 @@ def start(directory):
          "-CAkey", str(ca_key), "-CAcreateserial", "-out", str(cert),
          "-days", "2", "-sha256", "-extfile", str(extensions)])
     (directory / "mssql.conf").write_text(
-        "[network]\n"
-        "tlscert = /var/opt/mssql/tls/server.crt\n"
-        "tlskey = /var/opt/mssql/tls/server.key\n"
-        "tlsprotocols = 1.2\n"
-        "forceencryption = 1\n", encoding="ascii"
+        server_tls_configuration(allow_unencrypted), encoding="ascii"
     )
     admin_password = "Aa1!" + secrets.token_urlsafe(30)
     reader_password = "Aa1!" + secrets.token_urlsafe(30)
@@ -159,7 +165,10 @@ GO
         "--mount", f"type=bind,source={directory},target=/fixture,readonly",
         "--entrypoint", "/bin/bash", IMAGE, "-c", startup,
     ], env=environment, timeout=180)
-    metadata = {"container": container, "owner": owner, "image": IMAGE}
+    metadata = {
+        "container": container, "owner": owner, "image": IMAGE,
+        "allow_unencrypted": allow_unencrypted,
+    }
     state = directory / "fixture.json"
     state.write_text(json.dumps(metadata, indent=2), encoding="utf-8")
     try:
@@ -194,6 +203,7 @@ GO
                 "OTAP_SQL_SERVER_USERNAME": "otel_reader",
                 "OTAP_SQL_SERVER_PASSWORD_FILE": str(password_file),
                 "OTAP_SQL_SERVER_CA_FILE": str(ca),
+                "OTAP_SQL_SERVER_ALLOW_UNENCRYPTED": "1" if allow_unencrypted else "0",
             },
         })
         state.write_text(json.dumps(metadata, indent=2), encoding="utf-8")
@@ -235,11 +245,17 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("operation", choices=["start", "stop"])
     parser.add_argument("--directory", required=True, type=Path)
+    parser.add_argument(
+        "--allow-unencrypted", action="store_true",
+        help="Allow non-TLS client connections to this disposable fixture; setup still verifies TLS.",
+    )
     args = parser.parse_args()
     directory = args.directory.resolve()
     if args.operation == "start":
-        start(directory)
+        start(directory, allow_unencrypted=args.allow_unencrypted)
     else:
+        if args.allow_unencrypted:
+            parser.error("--allow-unencrypted applies only to start")
         stop(directory)
 
 
